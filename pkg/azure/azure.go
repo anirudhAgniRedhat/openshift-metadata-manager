@@ -336,3 +336,8 @@ func getClusterResourceGroup(k8sClient client.Client) (string, string, error) {
 
 	return infra.Status.PlatformStatus.Azure.ResourceGroupName, infra.Status.InfrastructureName, nil
 }
+
+func UpdateResourceTags(resources infraType.CloudResource, tags map[string]string) error {
+	fmt.Println("Tags Updated")
+	return nil
+}

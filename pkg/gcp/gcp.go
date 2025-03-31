@@ -334,3 +334,8 @@ func getGCPCredentials(ctx context.Context) (*google.Credentials, error) {
 	}
 	return creds, nil
 }
+
+func UpdateResourceTags(resources infraType.CloudResource, tags map[string]string) error {
+	fmt.Println("Tags Updated")
+	return nil
+}

@@ -28,6 +28,7 @@ var ClusterTagKey = "kubernetes.io/cluster/%s"
 const ClusterTagValue = "owned"
 
 func ListAWSResources() ([]infraType.CloudResource, error) {
+	fmt.Printf("Listing AWS resources\n")
 	ctx := context.TODO()
 	var resources []infraType.CloudResource
 
@@ -354,4 +355,144 @@ func getClusterNameFromInfrastructure(k8sClient client.Client) (string, error) {
 		return "", fmt.Errorf("failed to get Infrastructure resource: %w", err)
 	}
 	return infra.Status.InfrastructureName, nil
+}
+
+func UpdateResourceTags(resources []infraType.CloudResource, tags map[string]string) error {
+	ctx := context.TODO()
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	var errs []error
+
+	// Initialize clients
+	ec2Client := ec2.NewFromConfig(cfg)
+	s3Client := s3.NewFromConfig(cfg)
+	iamClient := iam.NewFromConfig(cfg)
+	elbClient := elasticloadbalancingv2.NewFromConfig(cfg)
+
+	for _, resource := range resources {
+		var err error
+		switch resource.Type {
+		case infraType.CloudResourceTypeAWSS3Bucket:
+			err = updateS3Tags(ctx, s3Client, resource, tags)
+		case infraType.CloudResourceTypeAWSEC2Instance,
+			infraType.CloudResourceTypeAWSEBSVolume,
+			infraType.CloudResourceTypeAWSVPC,
+			infraType.CloudResourceTypeAWSSubnet:
+			err = updateEC2Tags(ctx, ec2Client, resource, tags)
+		case infraType.CloudResourceTypeAWSIAMRole:
+			err = updateIAMTags(ctx, iamClient, resource, tags)
+		case infraType.CloudResourceTypeAWSLoadBalancer:
+			err = updateELBv2Tags(ctx, elbClient, resource, tags)
+		default:
+			err = fmt.Errorf("unsupported resource type: %s", resource.Type)
+		}
+
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to update %s (%s): %w",
+				resource.ID, resource.Type, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("encountered %d errors: %v", len(errs), errs)
+	}
+	return nil
+}
+
+func updateS3Tags(ctx context.Context, client *s3.Client, resource infraType.CloudResource, tags map[string]string) error {
+	mergedTags := mergeTags(resource.Tags, tags)
+	s3Tags := convertToS3Tags(mergedTags)
+
+	_, err := client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket: aws.String(resource.ID),
+		Tagging: &s3Types.Tagging{
+			TagSet: s3Tags,
+		},
+	})
+	return err
+}
+
+func updateEC2Tags(ctx context.Context, client *ec2.Client, resource infraType.CloudResource, tags map[string]string) error {
+	ec2Tags := convertToEC2Tags(tags)
+	_, err := client.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{resource.ID},
+		Tags:      ec2Tags,
+	})
+	return err
+}
+
+func updateIAMTags(ctx context.Context, client *iam.Client, resource infraType.CloudResource, tags map[string]string) error {
+	iamTags := convertToIAMTags(tags)
+	_, err := client.TagRole(ctx, &iam.TagRoleInput{
+		RoleName: aws.String(resource.Name),
+		Tags:     iamTags,
+	})
+	return err
+}
+
+func updateELBv2Tags(ctx context.Context, client *elasticloadbalancingv2.Client, resource infraType.CloudResource, tags map[string]string) error {
+	elbTags := convertToELBv2Tags(tags)
+	_, err := client.AddTags(ctx, &elasticloadbalancingv2.AddTagsInput{
+		ResourceArns: []string{resource.ID},
+		Tags:         elbTags,
+	})
+	return err
+}
+
+func mergeTags(existing, newTags map[string]string) map[string]string {
+	merged := make(map[string]string)
+	for k, v := range existing {
+		merged[k] = v
+	}
+	for k, v := range newTags {
+		merged[k] = v
+	}
+	return merged
+}
+
+func convertToEC2Tags(tags map[string]string) []types.Tag {
+	var ec2Tags []types.Tag
+	for k, v := range tags {
+		ec2Tags = append(ec2Tags, types.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	return ec2Tags
+}
+
+func convertToS3Tags(tags map[string]string) []s3Types.Tag {
+	var s3Tags []s3Types.Tag
+	for k, v := range tags {
+		s3Tags = append(s3Tags, s3Types.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	return s3Tags
+}
+
+func convertToIAMTags(tags map[string]string) []iamTypes.Tag {
+	var iamTags []iamTypes.Tag
+	for k, v := range tags {
+		iamTags = append(iamTags, iamTypes.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	return iamTags
+}
+
+func convertToELBv2Tags(tags map[string]string) []elbv2Types.Tag {
+	var elbTags []elbv2Types.Tag
+	for k, v := range tags {
+		elbTags = append(elbTags, elbv2Types.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	return elbTags
 }
