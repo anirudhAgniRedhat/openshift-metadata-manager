@@ -336,6 +336,6 @@ func getGCPCredentials(ctx context.Context) (*google.Credentials, error) {
 }
 
 func UpdateResourceTags(resources infraType.CloudResource, tags map[string]string) error {
-	fmt.Println("Tags Updated")
+	fmt.Println("Tags Update for GCP is not implemented yet")
 	return nil
 }
