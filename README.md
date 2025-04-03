@@ -6,8 +6,7 @@ A CLI tool for managing cloud infrastructure resource tags in OpenShift clusters
 
 ## Features
 
-- ☁️ **Multi-Cloud Support**: AWS, Azure, GCP, IBM Cloud, OpenStack
-- 🔄 **Live Progress Updates**: Interactive spinner with status messages
+- ☁️ **Multi-Cloud Support**: AWS, Azure, GCP.
 - 🔍 **Automatic Platform Detection**: Identifies cloud provider from cluster
 - 🧪 **Dry-Run Mode**: Test changes without modifications
 - 🛠 **Kubernetes Integration**: Works with OpenShift cluster configuration
