@@ -123,21 +123,32 @@ func syncAzureTags(tags map[string]string) {
 	}
 
 	for _, res := range resources {
-		fmt.Printf("Processing %s (%s)\n", res.ID, res.Type)
-
-		newTags := mergeTags(res.Tags, tags)
-		if dryRun {
-			fmt.Println("  🔄 [Dry Run] Tag changes:")
-			printTagDiff(res.Tags, newTags)
-			continue
-		}
-
-		if err := azure.UpdateResourceTags(res, newTags); err != nil {
-			log.Printf("  ❌ Error updating tags: %v", err)
-		} else {
-			fmt.Println("  ✓ Tags updated successfully")
-		}
+		fmt.Println("Resources to be updated:", res.Type)
+		fmt.Println("ResourceID :", res.ID, res.Name)
 	}
+
+	if err = azure.UpdateResourceTags(resources, tags); err != nil {
+		log.Printf("  ❌ Error updating tags: %v", err)
+	} else {
+		fmt.Println("  ✓ Tags updated successfully")
+	}
+
+	//for _, res := range resources {
+	//	fmt.Printf("Processing %s (%s)\n", res.ID, res.Type)
+	//
+	//	newTags := mergeTags(res.Tags, tags)
+	//	if dryRun {
+	//		fmt.Println("  🔄 [Dry Run] Tag changes:")
+	//		printTagDiff(res.Tags, newTags)
+	//		continue
+	//	}
+	//
+	//	if err := azure.UpdateResourceTags(res, newTags); err != nil {
+	//		log.Printf("  ❌ Error updating tags: %v", err)
+	//	} else {
+	//		fmt.Println("  ✓ Tags updated successfully")
+	//	}
+	//}
 }
 
 func syncGCPTags(tags map[string]string) {

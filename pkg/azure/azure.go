@@ -3,8 +3,15 @@ package azure
 import (
 	"context"
 	"fmt"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+
 	"log"
 	"os"
+	_ "strings"
+	"time"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -337,7 +344,306 @@ func getClusterResourceGroup(k8sClient client.Client) (string, string, error) {
 	return infra.Status.PlatformStatus.Azure.ResourceGroupName, infra.Status.InfrastructureName, nil
 }
 
-func UpdateResourceTags(resources infraType.CloudResource, tags map[string]string) error {
-	fmt.Println("Tags Updated")
+func UpdateResourceTags(resources []infraType.CloudResource, tags map[string]string) error {
+	ctx := context.Background()
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return fmt.Errorf("azure authentication failed: %w", err)
+	}
+
+	subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
+	if subscriptionID == "" {
+		return fmt.Errorf("AZURE_SUBSCRIPTION_ID environment variable not set")
+	}
+
+	var errs []error
+
+	for _, resource := range resources {
+		var err error
+		switch resource.Type {
+		case infraType.CloudResourceTypeAzureVM:
+			err = updateVMTags(ctx, cred, subscriptionID, resource, tags)
+		case infraType.CloudResourceTypeAzureManagedDisk:
+			err = updateDiskTags(ctx, cred, subscriptionID, resource, tags)
+		case infraType.CloudResourceTypeAzureVirtualNetwork:
+			err = updateVNetTags(ctx, cred, subscriptionID, resource, tags)
+		case infraType.CloudResourceTypeAzureLoadBalancer:
+			err = updateLBTags(ctx, cred, subscriptionID, resource, tags)
+		case infraType.CloudResourceTypeAzurePublicIP:
+			err = updateIPTags(ctx, cred, subscriptionID, resource, tags)
+		case infraType.CloudResourceTypeAzureStorageAccount:
+			err = updateStorageTags(ctx, cred, subscriptionID, resource, tags)
+		case infraType.CloudResourceTypeAzureSubnet:
+			err = updateSubnetTags(ctx, cred, subscriptionID, resource, tags)
+		case infraType.CloudResourceTypeAzureNetworkSecurityGroup:
+			err = updateNSGTags(ctx, cred, subscriptionID, resource, tags)
+		default:
+			err = fmt.Errorf("unsupported resource type: %s", resource.Type)
+		}
+
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to update %s (%s): %w",
+				resource.ID, resource.Type, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("encountered %d errors: %v", len(errs), errs)
+	}
 	return nil
+}
+
+// Virtual Machine Tags Update
+func updateVMTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armcompute.NewVirtualMachinesClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse VM ID: %w", err)
+	}
+
+	mergedTags := mergeAzureTags(resource.Tags, tags)
+
+	poller, err := client.BeginUpdate(ctx,
+		parsedID.ResourceGroupName,
+		parsedID.Name,
+		armcompute.VirtualMachineUpdate{
+			Tags: mergedTags,
+		}, nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = poller.PollUntilDone(ctx, &runtime.PollUntilDoneOptions{
+		Frequency: 5 * time.Second,
+	})
+	return err
+}
+
+// Managed Disk Tags Update
+func updateDiskTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armcompute.NewDisksClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse Disk ID: %w", err)
+	}
+
+	mergedTags := mergeAzureTags(resource.Tags, tags)
+
+	poller, err := client.BeginUpdate(ctx,
+		parsedID.ResourceGroupName,
+		parsedID.Name,
+		armcompute.DiskUpdate{
+			Tags: mergedTags,
+		}, nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = poller.PollUntilDone(ctx, &runtime.PollUntilDoneOptions{
+		Frequency: 5 * time.Second,
+	})
+	return err
+}
+
+// Virtual Network Tags Update
+func updateVNetTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armnetwork.NewVirtualNetworksClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse VNet ID: %w", err)
+	}
+
+	mergedTags := mergeAzureTags(resource.Tags, tags)
+
+	_, err = client.UpdateTags(ctx,
+		parsedID.ResourceGroupName,
+		parsedID.Name,
+		armnetwork.TagsObject{
+			Tags: mergedTags,
+		}, nil)
+	return err
+}
+
+// Load Balancer Tags Update
+func updateLBTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armnetwork.NewLoadBalancersClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse LB ID: %w", err)
+	}
+
+	mergedTags := mergeAzureTags(resource.Tags, tags)
+
+	_, err = client.UpdateTags(ctx,
+		parsedID.ResourceGroupName,
+		parsedID.Name,
+		armnetwork.TagsObject{
+			Tags: mergedTags,
+		}, nil)
+	return err
+}
+
+// Public IP Tags Update
+func updateIPTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armnetwork.NewPublicIPAddressesClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse Public IP ID: %w", err)
+	}
+
+	mergedTags := mergeAzureTags(resource.Tags, tags)
+
+	_, err = client.UpdateTags(ctx,
+		parsedID.ResourceGroupName,
+		parsedID.Name,
+		armnetwork.TagsObject{
+			Tags: mergedTags,
+		}, nil)
+	return err
+}
+
+// Storage Account Tags Update
+func updateStorageTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armstorage.NewAccountsClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse Storage Account ID: %w", err)
+	}
+
+	mergedTags := mergeAzureTags(resource.Tags, tags)
+
+	_, err = client.Update(ctx,
+		parsedID.ResourceGroupName,
+		parsedID.Name,
+		armstorage.AccountUpdateParameters{
+			Tags: mergedTags,
+		}, nil)
+	return err
+}
+
+// Subnet Tags Update
+func updateSubnetTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armnetwork.NewSubnetsClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse Subnet ID: %w", err)
+	}
+
+	// Get parent VNet name from resource ID
+	vnetName := parsedID.Parent.Name
+	subnetName := parsedID.Name
+
+	// Get existing subnet configuration
+	subnet, err := client.Get(ctx,
+		parsedID.ResourceGroupName,
+		vnetName,
+		subnetName,
+		nil)
+	if err != nil {
+		return fmt.Errorf("failed to get subnet: %w", err)
+	}
+
+	// Merge tags
+	//mergedTags := mergeAzureTags(resource.Tags, tags)
+	//subnet.Subnet = mergedTags
+
+	// Update subnet
+	poller, err := client.BeginCreateOrUpdate(ctx,
+		parsedID.ResourceGroupName,
+		vnetName,
+		subnetName,
+		subnet.Subnet,
+		nil)
+	if err != nil {
+		return fmt.Errorf("failed to start subnet update: %w", err)
+	}
+
+	_, err = poller.PollUntilDone(ctx, &runtime.PollUntilDoneOptions{
+		Frequency: 5 * time.Second,
+	})
+	return err
+}
+
+// Network Security Group Tags Update
+func updateNSGTags(ctx context.Context, cred azcore.TokenCredential, subscriptionID string,
+	resource infraType.CloudResource, tags map[string]string) error {
+
+	client, err := armnetwork.NewSecurityGroupsClient(subscriptionID, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	parsedID, err := arm.ParseResourceID(resource.ID)
+	if err != nil {
+		return fmt.Errorf("failed to parse NSG ID: %w", err)
+	}
+
+	mergedTags := mergeAzureTags(resource.Tags, tags)
+
+	_, err = client.UpdateTags(ctx,
+		parsedID.ResourceGroupName,
+		parsedID.Name,
+		armnetwork.TagsObject{
+			Tags: mergedTags,
+		}, nil)
+	return err
+}
+
+// Helper function to merge tags
+func mergeAzureTags(existing map[string]string, newTags map[string]string) map[string]*string {
+	merged := make(map[string]*string)
+
+	// Copy existing tags
+	for k, v := range existing {
+		merged[k] = to.Ptr(v)
+	}
+
+	// Add/overwrite with new tags
+	for k, v := range newTags {
+		merged[k] = to.Ptr(v)
+	}
+
+	return merged
 }
